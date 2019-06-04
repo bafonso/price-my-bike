@@ -4,6 +4,19 @@ from . import mongodb as mdb
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 sc = StandardScaler()
+from matplotlib import pyplot as plt
+import seaborn as sns
+import re
+import gensim
+import spacy
+from gensim import corpora
+import nltk; nltk.download('stopwords')
+import spacy
+from nltk.corpus import stopwords
+from gensim.models import CoherenceModel
+from gensim.utils import simple_preprocess
+
+
 
 
 # Text related
@@ -25,6 +38,7 @@ def sanitize_text(input):
 
 def prune_categories(item_specific_details,min_occurrences):
     final_cats_to_use = {}
+    all_cats = {}
     for cat,_ in item_specific_details.items():
         _feat_group = item_specific_details[cat]
         # what = [i for i in item_specific_details[key]]
@@ -41,21 +55,23 @@ def prune_categories(item_specific_details,min_occurrences):
         _df = pd.DataFrame([_cats,_values] ).transpose()
         _df.columns = ['categories','occurrences']
         _df = _df.sort_values('occurrences', ascending=False)
+        # We store all of these
+        final_cat_dict = _df.set_index('categories').to_dict()
+        all_cats[cat] = final_cat_dict
+
+        # we keep all categories above a certain threshold
         _df = _df[_df.occurrences > min_occurrences]
+        
         if len(_df.index)> 1 :
             final_cat_dict = _df.set_index('categories').to_dict()
             final_cats_to_use[cat] = final_cat_dict
-    return final_cats_to_use
+        
+    return final_cats_to_use,all_cats
 
 
-def extract_all_features(category_id,number_of_items):
-    
-    items = mdb.get_ebay_item_category(category_id,number_of_items)
-    # we will populate these with what we find
-    item_specific_feature_name = []
-    item_specific_count = dict()
-    item_specific_types = dict()
+def extract_all_features(items,category_id,number_of_items):
 
+    items.rewind()
     item_specific_details = dict()
 
     # f = open('temp_out.txt', 'w')
@@ -120,6 +136,16 @@ def is_number_tryexcept(s):
         return False
 
 
+def get_category_corpus(category_id):
+    items_all = mdb.get_completed_ebay_item_category(category_id,0)
+    df_for_lda = pd.DataFrame.from_records(items_all)
+
+    texts = df_for_lda.Description.to_list()
+    data_words, stop_words = initial_text_clean_up(texts)
+    corpus, id2word = create_corpus(data_words, stop_words)
+    return corpus
+
+
 def preprocess_df(pruned_df):
     my_df = pruned_df
     cols = my_df.columns
@@ -132,7 +158,7 @@ def preprocess_df(pruned_df):
     
     if len(X.drop(cat_cols, axis=1).columns) > 0:
         X_scaled = X.drop(cat_cols, axis=1)
-        X_scaled = pd.DataFrame(sc.fit_transform(X_scaled), columns=X_scaled.columns.values)
+        # X_scaled = pd.DataFrame(sc.fit_transform(X_scaled), columns=X_scaled.columns.values)
         #Add back in string columns
         X_scaled[cat_cols] = X[cat_cols]
 
@@ -153,7 +179,6 @@ def remove_cols_below_null_pct(df, null_pct):
         if ( float(aha[ind]) / float(len(df)) ) < (null_pct/100.) :
             cols_to_drop.append(ind)
         # print(ind)
-
     pruned_df = df.drop(cols_to_drop, axis=1)
     return pruned_df
 
@@ -167,12 +192,16 @@ def convert_df_to_number(_df):
         _temp_df = _temp_df[pd.notnull(_df[col])] # remove NaNs
         _df_size = len(_temp_df)
         how_many_numbers = sum(_temp_df.apply(is_number_tryexcept))
+        # print(how_many_numbers)
         ratio = how_many_numbers/_df_size
-        if ratio > 0.9 :
+        # print(ratio)
+        # if ratio > 0.9 :
+        if ratio == 1:
             _df[col] = _df[col].apply(float)
     return _df
 
 def get_all_items_list(items,final_cats_to_use):
+    items.rewind()
     all_items_list = []
     expected_cats = len(final_cats_to_use)
     for item in items: # for every item
@@ -233,3 +262,128 @@ def get_all_items_list(items,final_cats_to_use):
 
 
         
+def plot_and_save_category_counts(pruned_df,max_cats=0):
+    """Saves plots of the counts for each category in a dataframe
+    Currently it selects a 75% cutoff for each category
+    
+    Arguments:
+        pruned_df {dataframe} -- Input DataFrame
+    """
+    for cat_name in pruned_df.columns:
+        # cat_name = 'brand'
+        plt.figure(figsize=(16,8))
+        _temp = pruned_df[cat_name].value_counts()
+        if max_cats == 0:
+            plot_limit = int(_temp.count()*0.75)
+        else:
+            plot_limit = max_cats
+        ax = sns.countplot(x=cat_name, data=pruned_df,
+                        order = pruned_df[cat_name].value_counts().iloc[:plot_limit].index)
+
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=40, ha="right", fontsize=16)
+        plt.tight_layout()
+        plt.title('Counts for category: ' + cat_name)
+        _fig_name = 'plots/' + cat_name + '_count.png'
+        plt.savefig(_fig_name)
+
+def remove_stopwords(texts,stop_words):
+        return [[word for word in simple_preprocess(str(doc)) if word not in stop_words] for doc in texts]
+
+def make_bigrams(texts,bigram_mod):
+    return [bigram_mod[doc] for doc in texts]
+
+def make_trigrams(texts,bigram_mod,trigram_mod):
+    return [trigram_mod[bigram_mod[doc]] for doc in texts]
+
+def lemmatization(texts, nlp, allowed_postags=['NOUN', 'ADJ', 'VERB', 'ADV']):
+    """https://spacy.io/api/annotation"""
+    texts_out = []
+    for sent in texts:
+        doc = nlp(" ".join(sent)) 
+        texts_out.append([token.lemma_ for token in doc if token.pos_ in allowed_postags])
+    return texts_out
+
+def sent_to_words(sentences):
+    for sentence in sentences:
+        yield(gensim.utils.simple_preprocess(str(sentence), deacc=True))  # deacc=True removes punctuations
+
+
+
+def build_lda_model_from_text(texts,num_of_topics):
+    
+    data_words, stop_words = initial_text_clean_up(texts)
+
+    #### Creating Bigram and Trigram Models
+    # Build the bigram and trigram models
+    corpus, id2word = create_corpus(data_words, stop_words)
+
+
+    #%%
+    # Build LDA model
+    lda_model = gensim.models.ldamodel.LdaModel(corpus=corpus,
+                                               id2word=id2word,
+                                               num_topics=num_of_topics, 
+                                               random_state=100,
+                                               update_every=1,
+                                               chunksize=100,
+                                               passes=10,
+                                               alpha='auto',
+                                               per_word_topics=True)
+
+    return lda_model
+
+def create_corpus(data_words, stop_words):
+    #### Creating Bigram and Trigram Models
+    # Build the bigram and trigram models
+    bigram = gensim.models.Phrases(data_words, min_count=5, threshold=100) # higher threshold fewer phrases.
+    trigram = gensim.models.Phrases(bigram[data_words], threshold=100)  
+
+    # Faster way to get a sentence clubbed as a trigram/bigram
+    bigram_mod = gensim.models.phrases.Phraser(bigram)
+    trigram_mod = gensim.models.phrases.Phraser(trigram)
+
+    # See trigram example
+    # print(trigram_mod[bigram_mod[data_words[1]]])
+
+    #### Remove Stopwords, Make Bigrams and Lemmatize
+    # Remove Stop Words
+    data_words_nostops = remove_stopwords(data_words, stop_words)
+
+    # Form Bigrams
+    data_words_bigrams = make_bigrams(data_words_nostops,bigram_mod)
+
+    # Initialize spacy 'en' model, keeping only tagger component (for efficiency)
+    # python3 -m spacy download en
+    nlp = spacy.load('en', disable=['parser', 'ner'])
+
+    # Do lemmatization keeping only noun, adj, vb, adv
+    data_lemmatized = lemmatization(data_words_bigrams, nlp, allowed_postags=['NOUN', 'ADJ', 'VERB', 'ADV'])
+
+    # print(data_lemmatized[:1])
+
+    # Create Dictionary
+    id2word = corpora.Dictionary(data_lemmatized)
+
+    # Create Corpus
+    texts = data_lemmatized
+
+    # Term Document Frequency
+    corpus = [id2word.doc2bow(text) for text in texts]
+    return corpus, id2word
+
+def initial_text_clean_up(texts):
+    stop_words = stopwords.words('english')
+    # stop_words.extend(['from', 'subject', 're', 'edu', 'use'])
+
+    data = texts    
+    #### Some pre-processing
+    # Remove new line characters
+    data = [re.sub('\s+', ' ', str(sent)) for sent in data]
+
+    # Remove distracting single quotes
+    data = [re.sub("\'", "", str(sent)) for sent in data]
+
+    # Tokenize words and Clean-up text
+    data_words = list(sent_to_words(data))
+    return data_words, stop_words
+
