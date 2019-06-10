@@ -2,13 +2,15 @@
 #  Price my Bike !
 ### Quickly pricing used items
 
+At Insight I developed a pipeline starting with eBay's historical data of sold bicycles and ending with the deployment of a user front end based on flask running on an AWS instance. You can find my presentation [here](presentations/Bruno_Afonso_insight.pdf) or jump to the [the final web app](http://insight.brunoafonso.ca).
+
+## Motivation
+
 With rising concern for the environment, the used and second-hand goods industry has increased popularity in recent years. Canadian second hand economy was 28.5B in 2018 and most canadians (85%) traded used items last year. 
 
 ![kijiji_info](kijiji_stats.png "Statistics by Kijiji Canada") 
 
 To this day, one of the main hurdle is sensibly pricing your item. This process can be very cumbersome based on each person's knowledge the item they are selling, online saviness and the availability of previous similar items online.
-
-At Insight I developed a pipeline starting with eBay's historical data of sold bicycles and ending with the deployment of a user front end based on flask running on an AWS instance.
  
 ## Data acquisition and initial pre-processing
 
