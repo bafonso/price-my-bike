@@ -18,7 +18,6 @@ from gensim.utils import simple_preprocess
 
 
 
-
 # Text related
 def sanitize_text(input):
     """Sanitize text from ebay listings by removing space and dashes
@@ -136,11 +135,16 @@ def is_number_tryexcept(s):
         return False
 
 
-def get_category_corpus(category_id):
+def get_texts_from_ebay_category(category_id):
     items_all = mdb.get_completed_ebay_item_category(category_id,0)
     df_for_lda = pd.DataFrame.from_records(items_all)
-
     texts = df_for_lda.Description.to_list()
+    return texts
+
+
+
+def get_category_corpus(category_id):
+    texts = get_texts_from_ebay_category(category_id)
     data_words, stop_words = initial_text_clean_up(texts)
     corpus, id2word = create_corpus(data_words, stop_words)
     return corpus
@@ -317,7 +321,6 @@ def build_lda_model_from_text(texts,num_of_topics):
     # Build the bigram and trigram models
     corpus, id2word = create_corpus(data_words, stop_words)
 
-
     #%%
     # Build LDA model
     lda_model = gensim.models.ldamodel.LdaModel(corpus=corpus,
@@ -330,7 +333,23 @@ def build_lda_model_from_text(texts,num_of_topics):
                                                alpha='auto',
                                                per_word_topics=True)
 
-    return lda_model
+    return lda_model, corpus, id2word
+
+def prep_text_for_lda(texts):
+    data_words, stop_words = initial_text_clean_up(texts)
+    print(data_words)
+    print(stop_words)
+    bigram = gensim.models.Phrases(data_words, min_count=5, threshold=100) # higher threshold fewer phrases.
+    trigram = gensim.models.Phrases(bigram[data_words], threshold=100)  
+    bigram_mod = gensim.models.phrases.Phraser(bigram)
+    trigram_mod = gensim.models.phrases.Phraser(trigram)
+
+    data_words_nostops = remove_stopwords(data_words, stop_words)
+    data_words_bigrams = make_bigrams(data_words_nostops,bigram_mod)
+    nlp = spacy.load('en', disable=['parser', 'ner'])
+    data_lemmatized = lemmatization(data_words_bigrams, nlp, allowed_postags=['NOUN', 'ADJ', 'VERB', 'ADV'])
+    return data_lemmatized
+
 
 def create_corpus(data_words, stop_words):
     #### Creating Bigram and Trigram Models
@@ -374,16 +393,33 @@ def create_corpus(data_words, stop_words):
 def initial_text_clean_up(texts):
     stop_words = stopwords.words('english')
     # stop_words.extend(['from', 'subject', 're', 'edu', 'use'])
-
     data = texts    
     #### Some pre-processing
     # Remove new line characters
     data = [re.sub('\s+', ' ', str(sent)) for sent in data]
-
     # Remove distracting single quotes
     data = [re.sub("\'", "", str(sent)) for sent in data]
-
     # Tokenize words and Clean-up text
     data_words = list(sent_to_words(data))
     return data_words, stop_words
 
+def print_topics_to_file(lda_model,topic_fname):
+    topics_info = []
+    for index, topic in lda_model.show_topics(formatted=False, num_words= 30):
+        # print([(w[0],w[1]) for w in topic])
+        topic_words = pd.DataFrame.from_records(
+            [(w[0],w[1]) for w in topic],columns=['words','prob'])
+        
+        # topic_words = topic_words.sort_values('weight')
+        topics_info.append(topic_words)
+
+    ti = 0
+    with open(topic_fname,'w') as topic_file:
+        for t in topics_info:
+            print(type(t))
+            topic_file.write('topic ' + str(ti)+ '\n')
+            for a in t.words.loc[0:10]:
+                topic_file.write(a + '\n') 
+            topic_file.write('\n')
+            ti += 1
+    
